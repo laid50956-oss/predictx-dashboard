@@ -1,11 +1,12 @@
 import streamlit as st
-import requests
 import pandas as pd
-import time
+import requests
+import plotly.graph_objects as go
+from datetime import datetime
 
-# -----------------------------
-# PredictX Dashboard
-# -----------------------------
+# =========================================================
+# PredictX - Predictive Maintenance Dashboard
+# =========================================================
 
 st.set_page_config(
     page_title="PredictX Dashboard",
@@ -13,100 +14,88 @@ st.set_page_config(
     layout="wide"
 )
 
-# -----------------------------
-# Title
-# -----------------------------
+# ---------------------------------------------------------
+# ThingSpeak configuration
+# ---------------------------------------------------------
 
-st.title("⚙️ PredictX")
-st.subheader("AI-Powered Predictive Maintenance Dashboard")
-
-st.write(
-    "Monitor temperature, current, voltage and vibration "
-    "data from the PredictX sensor system."
-)
-
-# -----------------------------
-# Sidebar
-# -----------------------------
-
-st.sidebar.header("ThingSpeak Settings")
-
-channel_id = st.sidebar.text_input(
-    "ThingSpeak Channel ID",
-    value="3510240"
-)
-
-read_api_key = st.sidebar.text_input(
-    "ThingSpeak Read API Key",
-    type="password"
-)
-
-number_of_readings = st.sidebar.slider(
-    "Number of readings",
-    min_value=10,
-    max_value=100,
-    value=30
-)
-
-refresh = st.sidebar.button("🔄 Refresh Data")
-
-# -----------------------------
-# Check API key
-# -----------------------------
-
-if not read_api_key:
-    st.info("👈 Enter your ThingSpeak Read API Key in the sidebar.")
-    st.stop()
-
-# -----------------------------
-# Get ThingSpeak data
-# -----------------------------
-
-url = (
-    f"https://api.thingspeak.com/channels/"
-    f"{channel_id}/feeds.json"
-    f"?api_key={read_api_key}"
-    f"&results={number_of_readings}"
-)
+CHANNEL_ID = "3510240"
 
 try:
+    READ_API_KEY = st.secrets["THINGSPEAK_READ_API_KEY"]
+except Exception:
+    st.error("❌ ThingSpeak Read API Key is not configured.")
+    st.info(
+        "Add THINGSPEAK_READ_API_KEY to Streamlit Cloud → "
+        "Settings → Secrets."
+    )
+    st.stop()
 
-    response = requests.get(url, timeout=10)
 
-    if response.status_code != 200:
-        st.error("Unable to connect to ThingSpeak.")
-        st.stop()
+# ---------------------------------------------------------
+# Get data from ThingSpeak
+# ---------------------------------------------------------
+
+@st.cache_data(ttl=15)
+def get_thingspeak_data():
+
+    url = (
+        f"https://api.thingspeak.com/channels/"
+        f"{CHANNEL_ID}/feeds.json"
+    )
+
+    params = {
+        "api_key": READ_API_KEY,
+        "results": 100
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=10
+    )
+
+    response.raise_for_status()
 
     data = response.json()
 
     feeds = data.get("feeds", [])
 
     if not feeds:
-        st.warning("No sensor data found.")
-        st.stop()
+        return pd.DataFrame()
 
-    # -----------------------------
-    # Convert to DataFrame
-    # -----------------------------
+    rows = []
 
-    df = pd.DataFrame(feeds)
+    for feed in feeds:
 
-    df["created_at"] = pd.to_datetime(df["created_at"])
+        rows.append({
+            "Time": feed.get("created_at"),
 
-    df["Temperature"] = pd.to_numeric(
-        df["field1"], errors="coerce"
-    )
+            "Temperature": pd.to_numeric(
+                feed.get("field1"),
+                errors="coerce"
+            ),
 
-    df["Current"] = pd.to_numeric(
-        df["field2"], errors="coerce"
-    )
+            "Current": pd.to_numeric(
+                feed.get("field2"),
+                errors="coerce"
+            ),
 
-    df["Voltage"] = pd.to_numeric(
-        df["field3"], errors="coerce"
-    )
+            "Voltage": pd.to_numeric(
+                feed.get("field3"),
+                errors="coerce"
+            ),
 
-    df["Vibration"] = pd.to_numeric(
-        df["field4"], errors="coerce"
+            "Vibration": pd.to_numeric(
+                feed.get("field4"),
+                errors="coerce"
+            )
+        })
+
+    df = pd.DataFrame(rows)
+
+    df["Time"] = pd.to_datetime(
+        df["Time"],
+        errors="coerce"
     )
 
     df = df.dropna(
@@ -118,172 +107,390 @@ try:
         ]
     )
 
-    # -----------------------------
-    # Latest reading
-    # -----------------------------
+    return df
 
-    latest = df.iloc[-1]
 
-    temperature = latest["Temperature"]
-    current = latest["Current"]
-    voltage = latest["Voltage"]
-    vibration = latest["Vibration"]
+# ---------------------------------------------------------
+# Diagnosis
+# ---------------------------------------------------------
 
-    # -----------------------------
-    # PredictX thresholds
-    # -----------------------------
+def diagnose(row):
 
-    abnormal = (
-        temperature > 60
-        or current > 4.0
-        or voltage > 22.0
-        or vibration > 8.0
-    )
+    temperature = row["Temperature"]
+    current = row["Current"]
+    voltage = row["Voltage"]
+    vibration = row["Vibration"]
 
-    # -----------------------------
-    # Dashboard metrics
-    # -----------------------------
+    problems = []
 
-    st.success("✅ ThingSpeak connected successfully")
+    if temperature > 60:
+        problems.append("High temperature detected")
 
-    st.markdown("## 📊 Live Sensor Monitoring")
+    if current > 4:
+        problems.append("High current detected")
 
-    col1, col2, col3, col4 = st.columns(4)
+    if voltage > 22:
+        problems.append("High voltage detected")
 
-    with col1:
-        st.metric(
-            "🌡️ Temperature",
-            f"{temperature:.2f} °C"
+    if vibration > 8:
+        problems.append("High vibration detected")
+
+    # No abnormal condition
+    if not problems:
+
+        return (
+            "NORMAL",
+            "System operating normally.",
+            "No immediate action required.",
+            5
         )
 
-    with col2:
-        st.metric(
-            "⚡ Current",
-            f"{current:.2f} A"
+    # Multiple abnormal conditions
+    if len(problems) >= 2:
+
+        return (
+            "CRITICAL",
+            "Multiple abnormal sensor conditions detected.",
+            "Inspect the system immediately and check for electrical or mechanical faults.",
+            90
         )
 
-    with col3:
-        st.metric(
-            "🔌 Voltage",
-            f"{voltage:.2f} V"
+    # Single abnormal condition
+    problem = problems[0]
+
+    if "current" in problem.lower():
+
+        return (
+            "FAILURE RISK",
+            "High current detected — possible electrical overload or fault.",
+            "Check for electrical overload or electrical fault.",
+            75
         )
 
-    with col4:
-        st.metric(
-            "📳 Vibration",
-            f"{vibration:.2f}"
+    if "voltage" in problem.lower():
+
+        return (
+            "FAILURE RISK",
+            "Abnormal voltage detected.",
+            "Inspect the power supply and electrical connections.",
+            75
         )
 
-    # -----------------------------
-    # Status
-    # -----------------------------
+    if "temperature" in problem.lower():
 
-    st.markdown("## 🚦 System Status")
+        return (
+            "FAILURE RISK",
+            "High temperature detected.",
+            "Check cooling, ventilation and possible overheating.",
+            75
+        )
 
-    if abnormal:
+    if "vibration" in problem.lower():
 
-        st.error("⚠️ ABNORMAL CONDITION DETECTED")
+        return (
+            "FAILURE RISK",
+            "High vibration detected.",
+            "Inspect mechanical alignment, bearings and mounting.",
+            75
+        )
 
-        if temperature > 60:
-            diagnosis = "High temperature detected."
-            action = "Check cooling system and temperature source."
-
-        elif current > 4.0:
-            diagnosis = "High current detected."
-            action = "Check for overload or electrical fault."
-
-        elif voltage > 22.0:
-            diagnosis = "High voltage detected."
-            action = "Check power supply and voltage regulation."
-
-        elif vibration > 8.0:
-            diagnosis = "High vibration detected."
-            action = "Check mechanical alignment and moving components."
-
-        else:
-            diagnosis = "Abnormal sensor pattern detected."
-            action = "Inspect the system."
-
-        st.warning(f"🔎 Diagnosis: {diagnosis}")
-        st.info(f"🛠️ Recommended Action: {action}")
-
-    else:
-
-        st.success("✅ SYSTEM OPERATING NORMALLY")
-        st.write("🔎 Diagnosis: No abnormal condition detected.")
-        st.write("🛠️ Recommended Action: No action required.")
-
-    # -----------------------------
-    # Sensor Charts
-    # -----------------------------
-
-    st.markdown("## 📈 Sensor Trends")
-
-    chart_data = df[
-        [
-            "created_at",
-            "Temperature",
-            "Current",
-            "Voltage",
-            "Vibration"
-        ]
-    ].set_index("created_at")
-
-    st.line_chart(
-        chart_data[
-            ["Temperature"]
-        ]
+    return (
+        "WARNING",
+        "Abnormal sensor reading detected.",
+        "Inspect the system.",
+        60
     )
 
-    st.line_chart(
-        chart_data[
-            ["Current"]
-        ]
-    )
 
-    st.line_chart(
-        chart_data[
-            ["Voltage"]
-        ]
-    )
+# ---------------------------------------------------------
+# Dashboard title
+# ---------------------------------------------------------
 
-    st.line_chart(
-        chart_data[
-            ["Vibration"]
-        ]
-    )
+st.title("⚙️ PredictX")
+st.subheader("AI-Powered Predictive Maintenance Dashboard")
 
-    # -----------------------------
-    # Recent readings
-    # -----------------------------
+st.write(
+    "Monitor → Predict → Diagnose → Prevent"
+)
 
-    st.markdown("## 📋 Recent Sensor Readings")
+st.divider()
 
-    display_df = df[
-        [
-            "created_at",
-            "Temperature",
-            "Current",
-            "Voltage",
-            "Vibration"
-        ]
-    ].copy()
 
-    display_df.columns = [
-        "Time",
-        "Temperature (°C)",
-        "Current (A)",
-        "Voltage (V)",
-        "Vibration"
-    ]
+# ---------------------------------------------------------
+# Load ThingSpeak data
+# ---------------------------------------------------------
 
-    st.dataframe(
-        display_df.tail(10),
-        use_container_width=True
-    )
+try:
+
+    df = get_thingspeak_data()
 
 except Exception as e:
 
-    st.error("❌ Something went wrong while loading ThingSpeak data.")
+    st.error("❌ Could not connect to ThingSpeak.")
 
-    st.write("Error:", e)
+    st.code(str(e))
+
+    st.info(
+        "Check your ThingSpeak Read API Key, Channel ID "
+        "and internet connection."
+    )
+
+    st.stop()
+
+
+if df.empty:
+
+    st.warning("⚠️ No sensor data available yet.")
+
+    st.stop()
+
+
+# ---------------------------------------------------------
+# Latest reading
+# ---------------------------------------------------------
+
+latest = df.iloc[-1]
+
+temperature = latest["Temperature"]
+current = latest["Current"]
+voltage = latest["Voltage"]
+vibration = latest["Vibration"]
+
+
+# ---------------------------------------------------------
+# Diagnosis
+# ---------------------------------------------------------
+
+status, diagnosis, action, risk = diagnose(latest)
+
+
+# ---------------------------------------------------------
+# Latest readings
+# ---------------------------------------------------------
+
+st.header("📊 Latest Sensor Readings")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        "🌡️ Temperature",
+        f"{temperature:.2f} °C"
+    )
+
+with col2:
+    st.metric(
+        "⚡ Current",
+        f"{current:.2f} A"
+    )
+
+with col3:
+    st.metric(
+        "🔌 Voltage",
+        f"{voltage:.2f} V"
+    )
+
+with col4:
+    st.metric(
+        "〰️ Vibration",
+        f"{vibration:.2f}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# System status
+# ---------------------------------------------------------
+
+st.header("🚦 System Status")
+
+if status == "NORMAL":
+
+    st.success("✅ SYSTEM STATUS: NORMAL")
+
+elif status == "WARNING":
+
+    st.warning("⚠️ SYSTEM STATUS: WARNING")
+
+else:
+
+    st.error("🚨 SYSTEM STATUS: FAILURE RISK")
+
+
+col1, col2 = st.columns(2)
+
+with col1:
+
+    st.subheader("🔍 Diagnosis")
+
+    st.write(diagnosis)
+
+with col2:
+
+    st.subheader("🛠️ Recommended Action")
+
+    st.write(action)
+
+
+# ---------------------------------------------------------
+# Failure risk
+# ---------------------------------------------------------
+
+st.subheader("📈 Failure Risk")
+
+st.progress(
+    min(risk, 100) / 100
+)
+
+st.write(
+    f"Estimated failure risk: **{risk}%**"
+)
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Sensor trend charts
+# ---------------------------------------------------------
+
+st.header("📈 Sensor Trend Analysis")
+
+# Temperature
+fig_temp = go.Figure()
+
+fig_temp.add_trace(
+    go.Scatter(
+        x=df["Time"],
+        y=df["Temperature"],
+        mode="lines+markers",
+        name="Temperature"
+    )
+)
+
+fig_temp.update_layout(
+    title="Temperature Trend",
+    xaxis_title="Time",
+    yaxis_title="Temperature (°C)",
+    height=400
+)
+
+st.plotly_chart(
+    fig_temp,
+    use_container_width=True
+)
+
+
+# Current
+fig_current = go.Figure()
+
+fig_current.add_trace(
+    go.Scatter(
+        x=df["Time"],
+        y=df["Current"],
+        mode="lines+markers",
+        name="Current"
+    )
+)
+
+fig_current.update_layout(
+    title="Current Trend",
+    xaxis_title="Time",
+    yaxis_title="Current (A)",
+    height=400
+)
+
+st.plotly_chart(
+    fig_current,
+    use_container_width=True
+)
+
+
+# Voltage
+fig_voltage = go.Figure()
+
+fig_voltage.add_trace(
+    go.Scatter(
+        x=df["Time"],
+        y=df["Voltage"],
+        mode="lines+markers",
+        name="Voltage"
+    )
+)
+
+fig_voltage.update_layout(
+    title="Voltage Trend",
+    xaxis_title="Time",
+    yaxis_title="Voltage (V)",
+    height=400
+)
+
+st.plotly_chart(
+    fig_voltage,
+    use_container_width=True
+)
+
+
+# Vibration
+fig_vibration = go.Figure()
+
+fig_vibration.add_trace(
+    go.Scatter(
+        x=df["Time"],
+        y=df["Vibration"],
+        mode="lines+markers",
+        name="Vibration"
+    )
+)
+
+fig_vibration.update_layout(
+    title="Vibration Trend",
+    xaxis_title="Time",
+    yaxis_title="Vibration",
+    height=400
+)
+
+st.plotly_chart(
+    fig_vibration,
+    use_container_width=True
+)
+
+
+# ---------------------------------------------------------
+# Recent readings
+# ---------------------------------------------------------
+
+st.divider()
+
+st.header("🧾 Recent Sensor Readings")
+
+display_df = df.copy()
+
+display_df["Time"] = display_df["Time"].dt.strftime(
+    "%Y-%m-%d %H:%M:%S"
+)
+
+st.dataframe(
+    display_df.tail(10).iloc[::-1],
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ---------------------------------------------------------
+# System information
+# ---------------------------------------------------------
+
+st.divider()
+
+st.caption(
+    f"ThingSpeak Channel: {CHANNEL_ID} | "
+    f"Total readings loaded: {len(df)}"
+)
+
+st.caption(
+    "PredictX prototype — sensor data from ESP32/Wokwi "
+    "via ThingSpeak."
+)
