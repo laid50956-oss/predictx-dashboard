@@ -20,15 +20,14 @@ st.set_page_config(
 
 CHANNEL_ID = "3510240"
 
-try:
-    READ_API_KEY = st.secrets["THINGSPEAK_READ_API_KEY"]
-except Exception:
-    st.error("❌ ThingSpeak Read API Key is not configured.")
-    st.info(
-        "Add THINGSPEAK_READ_API_KEY to Streamlit Cloud → "
-        "Settings → Secrets."
-    )
+if "THINGSPEAK_READ_API_KEY" not in st.secrets:
+    st.error("❌ Secret name THINGSPEAK_READ_API_KEY was not found.")
+    st.write("Available secret names:", list(st.secrets.keys()))
     st.stop()
+
+READ_API_KEY = st.secrets["THINGSPEAK_READ_API_KEY"]
+
+st.success("✅ ThingSpeak API key loaded successfully.")
 
 
 # ---------------------------------------------------------
